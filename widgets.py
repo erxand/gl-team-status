@@ -79,32 +79,50 @@ class MRTable(DataTable):
     def populate(self, mrs: list[MR], search_query: str = "") -> None:
         self.clear(columns=True)
 
-        # Fixed columns: MR(7) + Author(15) + Approvals(10) + Threads(14) + Pipeline(13) = 59
-        # Cell padding: ~2 per column × 6 = 12
-        other_cols = 59
-        cell_padding = 12
-        title_width = max(20, self.size.width - other_cols - cell_padding) if self.size.width > 0 else 60
-
-        self.add_column("MR", width=7)
-        self.add_column("Author", width=15)
-        self.add_column("Title", width=title_width)
-        self.add_column("Approvals", width=10)
-        self.add_column("Threads", width=14)
-        self.add_column("Pipeline", width=13)
-
+        # Pre-compute cell contents so we can measure widths
+        rows: list[tuple] = []
         for mr in mrs:
             author = mr.author_username
             if len(author) > 14:
                 author = author[:11] + "..."
-            self.add_row(
+            rows.append((
                 Text(f"!{mr.iid}"),
                 Text(f"@{author}", style="dim"),
                 _highlight_match(mr.title, search_query),
                 approval_text(mr),
                 thread_text(mr),
                 pipeline_status_text(mr.pipeline_status),
-                key=str(mr.iid),
-            )
+                str(mr.iid),
+            ))
+
+        # Measure max content width per column (excluding Title which fills remaining space)
+        # Indices: 0=MR, 1=Author, 3=Approvals, 4=Threads, 5=Pipeline
+        headers = ["MR", "Author", "Title", "Approvals", "Threads", "Pipeline"]
+        mr_w = max((len(r[0].plain) for r in rows), default=2)
+        mr_w = max(mr_w, len(headers[0]))
+        author_w = max((len(r[1].plain) for r in rows), default=6)
+        author_w = max(author_w, len(headers[1]))
+        appr_w = max((len(r[3].plain) for r in rows), default=3)
+        appr_w = max(appr_w, len(headers[3]))
+        thr_w = max((len(r[4].plain) for r in rows), default=7)
+        thr_w = max(thr_w, len(headers[4]))
+        pipe_w = max((len(r[5].plain) for r in rows), default=8)
+        pipe_w = max(pipe_w, len(headers[5]))
+
+        # 2 chars padding per column × 6 columns
+        cell_padding = 12
+        fixed = mr_w + author_w + appr_w + thr_w + pipe_w + cell_padding
+        title_w = max(20, self.size.width - fixed) if self.size.width > 0 else 60
+
+        self.add_column(headers[0], width=mr_w)
+        self.add_column(headers[1], width=author_w)
+        self.add_column(headers[2], width=title_w)
+        self.add_column(headers[3], width=appr_w)
+        self.add_column(headers[4], width=thr_w)
+        self.add_column(headers[5], width=pipe_w)
+
+        for mr_id, author, title, appr, thr, pipe, key in rows:
+            self.add_row(mr_id, author, title, appr, thr, pipe, key=key)
 
 
 class SettingsTable(DataTable):
