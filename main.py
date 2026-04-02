@@ -176,6 +176,8 @@ class TeamStatusApp(App):
             settings.styles.display = "none"
 
     def _schedule_refresh(self) -> None:
+        if self._refreshing:
+            return
         self._refresh_task = asyncio.ensure_future(self._do_refresh())
 
     def _update_header(self) -> None:
@@ -240,7 +242,8 @@ class TeamStatusApp(App):
 
     async def _do_refresh(self) -> None:
         self._refreshing = True
-        self._spinner_timer.resume()
+        if self._spinner_timer is not None:
+            self._spinner_timer.resume()
         self._update_hotkeys()
         try:
             followed_usernames = db.get_followed_usernames()
@@ -265,7 +268,8 @@ class TeamStatusApp(App):
             self._render_table()
         finally:
             self._refreshing = False
-            self._spinner_timer.pause()
+            if self._spinner_timer is not None:
+                self._spinner_timer.pause()
             self._update_hotkeys()
 
     def _visible_mrs(self) -> list[MR]:
@@ -309,7 +313,9 @@ class TeamStatusApp(App):
 
     async def _load_members(self) -> None:
         if not self._project_members:
+            self.query_one("#settings-table", SettingsTable).loading = True
             self._project_members = await gitlab.fetch_project_members()
+            self.query_one("#settings-table", SettingsTable).loading = False
         self._render_settings()
 
     # --- Key handling ---
@@ -348,9 +354,11 @@ class TeamStatusApp(App):
         if self._settings_visible:
             await self._load_members()
         else:
-            # Leaving settings — refresh MRs
-            self._followed_ids = {u.user_id for u in db.get_followed_users()}
-            if self._followed_ids:
+            # Leaving settings — refresh MRs only if followed set changed
+            new_ids = {u.user_id for u in db.get_followed_users()}
+            changed = new_ids != self._followed_ids
+            self._followed_ids = new_ids
+            if self._followed_ids and changed:
                 self.seconds_until_refresh = REFRESH_INTERVAL
                 self._schedule_refresh()
 

@@ -5,11 +5,18 @@ import json
 
 from models import ApprovalInfo, MR, TeamMember, ThreadCount
 
-_semaphore = asyncio.Semaphore(10)
+_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    global _semaphore
+    if _semaphore is None:
+        _semaphore = asyncio.Semaphore(10)
+    return _semaphore
 
 
 async def _run(cmd: list[str]) -> str:
-    async with _semaphore:
+    async with _get_semaphore():
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
@@ -57,11 +64,22 @@ async def _fetch_group_path() -> str | None:
 async def fetch_project_members() -> list[TeamMember]:
     seen: dict[int, TeamMember] = {}
 
+    def _parse_member(m: dict) -> TeamMember | None:
+        if not isinstance(m, dict):
+            return None
+        uid = m.get("id")
+        uname = m.get("username")
+        name = m.get("name", "")
+        if uid is None or uname is None:
+            return None
+        return TeamMember(user_id=uid, username=uname, name=name)
+
     # First try project members/all (direct + inherited)
     data = await _fetch_paginated("projects/:fullpath/members/all")
     for m in data:
-        if isinstance(m, dict) and "id" in m:
-            seen[m["id"]] = TeamMember(user_id=m["id"], username=m["username"], name=m["name"])
+        member = _parse_member(m)
+        if member:
+            seen[member.user_id] = member
 
     # Also fetch group members for broader coverage
     group_path = await _fetch_group_path()
@@ -69,8 +87,9 @@ async def fetch_project_members() -> list[TeamMember]:
         encoded = group_path.replace("/", "%2F")
         group_data = await _fetch_paginated(f"groups/{encoded}/members/all")
         for m in group_data:
-            if isinstance(m, dict) and "id" in m and m["id"] not in seen:
-                seen[m["id"]] = TeamMember(user_id=m["id"], username=m["username"], name=m["name"])
+            member = _parse_member(m)
+            if member and member.user_id not in seen:
+                seen[member.user_id] = member
 
     members = sorted(seen.values(), key=lambda m: m.username.lower())
     return members
