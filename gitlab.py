@@ -95,7 +95,17 @@ async def fetch_project_members() -> list[TeamMember]:
     return members
 
 
-async def fetch_open_mrs(followed_usernames: set[str]) -> list[MR]:
+async def fetch_current_user_id() -> int | None:
+    raw = await _run(["glab", "api", "user"])
+    if not raw.strip():
+        return None
+    try:
+        return json.loads(raw).get("id")
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+async def fetch_open_mrs(followed_usernames: set[str], current_user_id: int | None = None) -> list[MR]:
     raw = await _run(["glab", "mr", "list", "--per-page=100", "--output=json"])
     if not raw.strip():
         return []
@@ -104,6 +114,7 @@ async def fetch_open_mrs(followed_usernames: set[str]) -> list[MR]:
     except json.JSONDecodeError:
         return []
     mrs = []
+    seen_iids: set[int] = set()
     for item in data:
         if item.get("state") != "opened":
             continue
@@ -111,17 +122,64 @@ async def fetch_open_mrs(followed_usernames: set[str]) -> list[MR]:
             continue
         author = item.get("author") or {}
         username = author.get("username", "")
-        if username not in followed_usernames:
+        reviewers = item.get("reviewers") or []
+        reviewer_ids = {r.get("id") for r in reviewers if isinstance(r, dict)}
+        is_reviewing = current_user_id is not None and current_user_id in reviewer_ids
+        is_followed_author = username in followed_usernames
+
+        if not is_followed_author and not is_reviewing:
             continue
+
+        iid = item["iid"]
+        if iid in seen_iids:
+            continue
+        seen_iids.add(iid)
+
         mrs.append(
             MR(
-                iid=item["iid"],
+                iid=iid,
                 title=item["title"],
                 author_username=username,
                 web_url=item["web_url"],
+                reviewing=is_reviewing,
             )
         )
     return mrs
+
+
+async def assign_reviewer(mr_iid: int, user_id: int) -> bool:
+    """Add user as a reviewer of the MR. Returns True on success."""
+    # First get existing reviewer IDs to avoid overwriting them
+    raw = await _run(
+        ["glab", "api", f"projects/:fullpath/merge_requests/{mr_iid}"]
+    )
+    existing_ids: list[int] = []
+    if raw.strip():
+        try:
+            mr_data = json.loads(raw)
+            for r in (mr_data.get("reviewers") or []):
+                if isinstance(r, dict) and "id" in r:
+                    existing_ids.append(r["id"])
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    if user_id in existing_ids:
+        return True  # already a reviewer
+
+    all_ids = existing_ids + [user_id]
+    ids_csv = ",".join(str(rid) for rid in all_ids)
+    raw = await _run([
+        "glab", "api", "--method", "PUT",
+        f"projects/:fullpath/merge_requests/{mr_iid}",
+        "-f", f"reviewer_ids={ids_csv}",
+    ])
+    if not raw.strip():
+        return False
+    try:
+        data = json.loads(raw)
+        return data.get("iid") == mr_iid
+    except (json.JSONDecodeError, KeyError):
+        return False
 
 
 async def fetch_approvals(mr_iid: int) -> ApprovalInfo:

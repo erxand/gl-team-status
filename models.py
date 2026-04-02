@@ -28,6 +28,7 @@ class MR:
     pipeline_status: str | None = None
     approvals: ApprovalInfo | None = None
     threads: ThreadCount | None = None
+    reviewing: bool = False  # whether current user is assigned as reviewer
 
     @property
     def is_draft(self) -> bool:

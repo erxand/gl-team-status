@@ -117,6 +117,7 @@ class TeamStatusApp(App):
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
         Binding("slash", "start_search", "Search", show=False),
+        Binding("a", "assign_reviewer", "Assign me", show=False),
     ]
 
     def __init__(self) -> None:
@@ -133,6 +134,7 @@ class TeamStatusApp(App):
         self._settings_visible: bool = False
         self._project_members: list[TeamMember] = []
         self._followed_ids: set[int] = set()
+        self._current_user_id: int | None = None
 
     def compose(self) -> ComposeResult:
         yield Static(id="header-bar")
@@ -224,7 +226,7 @@ class TeamStatusApp(App):
             )
         else:
             self.query_one("#hotkeys", Static).update(
-                f"o open · f refresh{spinner} · s settings · / search · q quit"
+                f"a assign me · o open · f refresh{spinner} · s settings · / search · q quit"
             )
 
     def _spin(self) -> None:
@@ -246,13 +248,16 @@ class TeamStatusApp(App):
             self._spinner_timer.resume()
         self._update_hotkeys()
         try:
+            if self._current_user_id is None:
+                self._current_user_id = await gitlab.fetch_current_user_id()
+
             followed_usernames = db.get_followed_usernames()
             if not followed_usernames:
                 self.mrs = []
                 self._render_table()
                 return
 
-            mrs = await gitlab.fetch_open_mrs(followed_usernames)
+            mrs = await gitlab.fetch_open_mrs(followed_usernames, self._current_user_id)
 
             async def enrich(mr: MR) -> None:
                 try:
@@ -372,6 +377,28 @@ class TeamStatusApp(App):
         mr = self._selected_mr()
         if mr:
             await gitlab.open_mr_in_browser(mr.iid)
+
+    async def action_assign_reviewer(self) -> None:
+        if self._settings_visible:
+            return
+        mr = self._selected_mr()
+        if not mr:
+            return
+        if self._current_user_id is None:
+            self._current_user_id = await gitlab.fetch_current_user_id()
+        if self._current_user_id is None:
+            self.notify("Could not determine current user", severity="error")
+            return
+        if mr.reviewing:
+            self.notify(f"Already reviewing !{mr.iid}", severity="warning")
+            return
+        ok = await gitlab.assign_reviewer(mr.iid, self._current_user_id)
+        if ok:
+            mr.reviewing = True
+            self._render_table()
+            self.notify(f"Assigned as reviewer on !{mr.iid}", severity="information")
+        else:
+            self.notify(f"Failed to assign reviewer on !{mr.iid}", severity="error")
 
     def action_force_refresh(self) -> None:
         if self._settings_visible:

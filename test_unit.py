@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from models import MR, ApprovalInfo, TeamMember, ThreadCount
-from widgets import approval_text, thread_text, pipeline_status_text, fuzzy_match
+from widgets import approval_text, thread_text, pipeline_status_text, reviewer_text, fuzzy_match
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +119,16 @@ class TestWidgetHelpers(unittest.TestCase):
         score, indices = fuzzy_match("Fix authentication bug", "zzzzz")
         self.assertIsNone(score)
         self.assertEqual(indices, [])
+
+    def test_reviewer_text_assigned(self):
+        mr = MR(iid=1, title="t", author_username="u", web_url="", reviewing=True)
+        t = reviewer_text(mr)
+        self.assertEqual(t.plain, "✓")
+
+    def test_reviewer_text_not_assigned(self):
+        mr = MR(iid=1, title="t", author_username="u", web_url="", reviewing=False)
+        t = reviewer_text(mr)
+        self.assertEqual(t.plain, "")
 
     def test_fuzzy_match_case_insensitive(self):
         score, _ = fuzzy_match("FIX AUTH", "fix")
@@ -298,6 +308,68 @@ class TestGitlabParsing(unittest.IsolatedAsyncioTestCase):
         with patch.object(gl, "_run", new_callable=AsyncMock, return_value=""):
             mrs = await gl.fetch_open_mrs({"alice"})
         self.assertEqual(mrs, [])
+
+    async def test_fetch_open_mrs_includes_reviewer_mrs(self):
+        """MRs where current user is a reviewer should be included even if author not followed."""
+        import gitlab as gl
+        data = [
+            {"iid": 1, "title": "Team MR", "state": "opened", "draft": False,
+             "author": {"username": "alice"}, "web_url": "http://x/1",
+             "reviewers": []},
+            {"iid": 2, "title": "Review requested", "state": "opened", "draft": False,
+             "author": {"username": "charlie"}, "web_url": "http://x/2",
+             "reviewers": [{"id": 99}]},
+            {"iid": 3, "title": "Not mine", "state": "opened", "draft": False,
+             "author": {"username": "charlie"}, "web_url": "http://x/3",
+             "reviewers": [{"id": 50}]},
+        ]
+        with patch.object(gl, "_run", new_callable=AsyncMock, return_value=json.dumps(data)):
+            mrs = await gl.fetch_open_mrs({"alice"}, current_user_id=99)
+        iids = [mr.iid for mr in mrs]
+        self.assertIn(1, iids)   # followed author
+        self.assertIn(2, iids)   # current user is reviewer
+        self.assertNotIn(3, iids)  # neither followed nor reviewing
+        # Check reviewing flag
+        mr2 = next(mr for mr in mrs if mr.iid == 2)
+        self.assertTrue(mr2.reviewing)
+        mr1 = next(mr for mr in mrs if mr.iid == 1)
+        self.assertFalse(mr1.reviewing)
+
+    async def test_fetch_current_user_id(self):
+        import gitlab as gl
+        with patch.object(gl, "_run", new_callable=AsyncMock, return_value='{"id": 42, "username": "me"}'):
+            uid = await gl.fetch_current_user_id()
+        self.assertEqual(uid, 42)
+
+    async def test_fetch_current_user_id_empty(self):
+        import gitlab as gl
+        with patch.object(gl, "_run", new_callable=AsyncMock, return_value=""):
+            uid = await gl.fetch_current_user_id()
+        self.assertIsNone(uid)
+
+    async def test_assign_reviewer_success(self):
+        import gitlab as gl
+        call_count = 0
+        async def mock_run(cmd):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # GET existing MR data
+                return json.dumps({"reviewers": [{"id": 10}]})
+            else:
+                # PUT response
+                return json.dumps({"iid": 123})
+        with patch.object(gl, "_run", new_callable=AsyncMock, side_effect=mock_run):
+            ok = await gl.assign_reviewer(123, 42)
+        self.assertTrue(ok)
+
+    async def test_assign_reviewer_already_assigned(self):
+        import gitlab as gl
+        async def mock_run(cmd):
+            return json.dumps({"reviewers": [{"id": 42}]})
+        with patch.object(gl, "_run", new_callable=AsyncMock, side_effect=mock_run):
+            ok = await gl.assign_reviewer(123, 42)
+        self.assertTrue(ok)
 
     async def test_fetch_project_members_handles_missing_fields(self):
         import gitlab as gl
