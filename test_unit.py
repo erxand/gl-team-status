@@ -218,6 +218,28 @@ class TestGitlabParsing(unittest.IsolatedAsyncioTestCase):
             result = await gl.fetch_approvals(123)
         self.assertEqual(result.approved_count, 2)
         self.assertEqual(result.required_count, 2)
+        self.assertFalse(result.user_has_approved)
+
+    async def test_fetch_approvals_user_has_approved(self):
+        import gitlab as gl
+        mock_response = json.dumps({
+            "approved_by": [{"user": {"id": 1}}, {"user": {"id": 42}}],
+            "approvals_required": 2,
+        })
+        with patch.object(gl, "_run", new_callable=AsyncMock, return_value=mock_response):
+            result = await gl.fetch_approvals(123, current_user_id=42)
+        self.assertEqual(result.approved_count, 2)
+        self.assertTrue(result.user_has_approved)
+
+    async def test_fetch_approvals_user_has_not_approved(self):
+        import gitlab as gl
+        mock_response = json.dumps({
+            "approved_by": [{"user": {"id": 1}}, {"user": {"id": 2}}],
+            "approvals_required": 2,
+        })
+        with patch.object(gl, "_run", new_callable=AsyncMock, return_value=mock_response):
+            result = await gl.fetch_approvals(123, current_user_id=99)
+        self.assertFalse(result.user_has_approved)
 
     async def test_fetch_approvals_empty(self):
         import gitlab as gl
@@ -225,6 +247,7 @@ class TestGitlabParsing(unittest.IsolatedAsyncioTestCase):
             result = await gl.fetch_approvals(123)
         self.assertEqual(result.approved_count, 0)
         self.assertEqual(result.required_count, 0)
+        self.assertFalse(result.user_has_approved)
 
     async def test_fetch_approvals_bad_json(self):
         import gitlab as gl

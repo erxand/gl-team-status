@@ -261,7 +261,7 @@ class TeamStatusApp(App):
 
             async def enrich(mr: MR) -> None:
                 try:
-                    mr.approvals = await gitlab.fetch_approvals(mr.iid)
+                    mr.approvals = await gitlab.fetch_approvals(mr.iid, self._current_user_id)
                     mr.threads = await gitlab.fetch_threads(mr.iid)
                     mr.pipeline_status = await gitlab.fetch_pipeline_status(mr.iid)
                 except Exception:
@@ -278,7 +278,7 @@ class TeamStatusApp(App):
             self._update_hotkeys()
 
     def _visible_mrs(self) -> list[MR]:
-        mrs = self.mrs
+        mrs = [mr for mr in self.mrs if not (mr.approvals and mr.approvals.user_has_approved)]
         if self.search_query:
             scored = []
             for mr in mrs:

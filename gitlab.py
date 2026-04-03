@@ -182,7 +182,7 @@ async def assign_reviewer(mr_iid: int, user_id: int) -> bool:
         return False
 
 
-async def fetch_approvals(mr_iid: int) -> ApprovalInfo:
+async def fetch_approvals(mr_iid: int, current_user_id: int | None = None) -> ApprovalInfo:
     raw = await _run(
         ["glab", "api", f"projects/:fullpath/merge_requests/{mr_iid}/approvals"]
     )
@@ -192,7 +192,17 @@ async def fetch_approvals(mr_iid: int) -> ApprovalInfo:
         data = json.loads(raw)
         approved_by = data.get("approved_by") or []
         required = data.get("approvals_required", 0)
-        return ApprovalInfo(approved_count=len(approved_by), required_count=required)
+        user_has_approved = False
+        if current_user_id is not None:
+            user_has_approved = any(
+                a.get("user", {}).get("id") == current_user_id
+                for a in approved_by
+            )
+        return ApprovalInfo(
+            approved_count=len(approved_by),
+            required_count=required,
+            user_has_approved=user_has_approved,
+        )
     except (json.JSONDecodeError, KeyError):
         return ApprovalInfo()
 

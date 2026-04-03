@@ -7,6 +7,7 @@ from dataclasses import dataclass
 class ApprovalInfo:
     approved_count: int = 0
     required_count: int = 0
+    user_has_approved: bool = False
 
 
 @dataclass
